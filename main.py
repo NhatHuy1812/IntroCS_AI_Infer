@@ -45,8 +45,10 @@ classes = { 0:'Speed limit (20km/h)',
             41:'End of no passing',
             42:'End no passing veh > 3.5 tons' }
 
+
+
 # Load the models (take many seconds)
-net = load_model('stns.pth', 'traffic_classifier.pth')
+net = load_model('stns.pth', 'traffic_classifier.pth', 'best_93.pt')
 
 # Inference
 result = inference(net,'image.png')
