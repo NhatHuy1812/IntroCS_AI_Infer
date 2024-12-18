@@ -1,6 +1,6 @@
 import torch
 from torchvision import transforms
-from PIL import Image
+from PIL import Image, ImageOps
 from models import get_model
 import torchvision
 import torch.nn as nn
@@ -10,17 +10,35 @@ import numpy as np
 import os
 import warnings
 
+def pad_to_square(image):
+    width, height = image.size
 
-def load_image(image_path, img_cols, img_rows):
+    if height > width:
+        # Cut the bottom to match the width
+        cropped_image = image.crop((0, 0, width, width))  # Crop height to width
+    elif width > height:
+        # Cut equally from both sides to match the height
+        delta = (width - height) // 2
+        cropped_image = image.crop((delta, 0, width - delta, height))  # Crop width to height
+    else:
+        return image  # Already square
+
+    return cropped_image
+
+def load_image(image_path, img_cols, img_rows, bbox):
+    x1, y1, x2, y2 = bbox
     transform = transforms.Compose([
         transforms.Resize((img_rows, img_cols)),
         transforms.ToTensor()
     ])
     image = Image.open(image_path).convert('RGB')
+    image = image.crop((x1, y1, x2, y2)) 
+    image = pad_to_square(image)
+    image.save('outputs/crop.jpg')
     image = transform(image).unsqueeze(0)
     return image
 
-def load_model(extractor, classifier):
+def load_model(extractor, classifier, localizer_path):
     
     warnings.filterwarnings("ignore", category=UserWarning)
     warnings.filterwarnings("ignore", category=FutureWarning)
@@ -33,13 +51,32 @@ def load_model(extractor, classifier):
     net2.load_state_dict(torch.load(classifier, map_location=device))
     net2.eval()
 
-    return (net1, net2)
+    stn_weight = torch.hub.load('ultralytics/yolov5', 'custom', path=localizer_path, force_reload=True)
+    stn_weight.conf = 0.35
 
+    return (net1, net2, stn_weight)
+
+def localizer(image_path, stn_weight):
+    original_image = Image.open(image_path).convert('RGB')
+    width, height = original_image.size
+    results = stn_weight(original_image)
+    detections = results.xyxy[0]
+    best_conf = 0
+    x1, y1, x2, y2 = (0, 0, height, width)
+    for *box, conf, cls_idx in detections:
+        if conf > best_conf:
+            best_conf = conf
+            x1, y1, x2, y2 = list(map(float, box))
+
+    return (x1, y1, x2, y2)
 
 def inference(net, image_path):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net1, net2 = net
-    image = load_image(image_path, 64, 64).to(device)
+    net1, net2, stn_weight = net
+
+    bbox = localizer(image_path, stn_weight)
+
+    image = load_image(image_path, 64, 64, bbox).to(device)
     with torch.no_grad():
         feat_sem, feat_illu, _ = net1.extract(image, is_warping=True)
         
